@@ -180,23 +180,6 @@ set -x  # Add this line for debugging
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- Android Debug Bridge (ADB) team
-- Bash scripting community
-- All contributors and testers
-
-## Support
-
-If you encounter any issues:
-1. Check the troubleshooting section
-2. Search existing issues
-3. Create a new issue with detailed information
-
 ---
 
 **Made with ❤️ for Android users who want to keep their memories safe!**
