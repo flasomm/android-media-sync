@@ -1,4 +1,4 @@
-# Android File Backup Tools
+# Android Media Sync Tool
 
 A bash scripts for backing up media files from Android devices using ADB (Android Debug Bridge).
 
