@@ -1,0 +1,319 @@
+#!/bin/bash
+
+# Android backup script via ADB
+# Copies all images and videos to destination directory
+
+# Configuration
+DESTINATION_DIR="<your destination directory>"
+
+echo "=== Android Backup via ADB ==="
+echo ""
+
+# Check ADB
+if ! command -v adb &> /dev/null; then
+    echo "❌ ADB not found. Install it with:"
+    echo "   brew install android-platform-tools"
+    exit 1
+fi
+
+if [ ! -d "$(dirname "$DESTINATION_DIR")" ]; then
+    echo "❌ Parent directory not accessible: $(dirname "$DESTINATION_DIR")"
+    exit 1
+fi
+
+# Stop and restart ADB to avoid authorization issues
+echo "🔄 Restarting ADB..."
+adb kill-server
+sleep 2
+adb start-server
+
+echo "📱 Searching for Android devices..."
+
+check_device_auth() {
+    local devices_output=$(adb devices 2>&1)
+
+    if echo "$devices_output" | grep -q "device$"; then
+        echo "✅ Android device authorized and connected"
+        DEVICE_ID=$(echo "$devices_output" | grep "device$" | cut -f1)
+        echo "📱 ID: $DEVICE_ID"
+        return 0
+    elif echo "$devices_output" | grep -q "unauthorized"; then
+        echo "❌ Device not authorized"
+        echo ""
+        echo "🔐 To authorize ADB on your phone:"
+        echo "1. Verify that USB debugging is enabled"
+        echo "2. Connect the phone via USB"
+        echo "3. On your phone, you should see a popup:"
+        echo "   'Allow USB debugging?'"
+        echo "4. Check 'Always allow from this computer'"
+        echo "5. Press 'Allow'"
+        echo ""
+        echo "⏳ Waiting for authorization..."
+        return 1
+    else
+        echo "❌ No Android device detected"
+        echo ""
+        echo "📋 Verify that:"
+        echo "1. The phone is connected via USB"
+        echo "2. USB debugging is enabled (Settings → Developer options)"
+        echo "3. The phone is unlocked"
+        return 1
+    fi
+}
+
+MAX_ATTEMPTS=5
+attempt=1
+
+while [ $attempt -le $MAX_ATTEMPTS ]; do
+    echo "Attempt $attempt/$MAX_ATTEMPTS..."
+
+    if check_device_auth; then
+        break
+    fi
+
+    if [ $attempt -lt $MAX_ATTEMPTS ]; then
+        echo "⏳ Waiting 10 seconds before retrying..."
+        sleep 10
+    fi
+
+    attempt=$((attempt + 1))
+done
+
+if [ $attempt -gt $MAX_ATTEMPTS ]; then
+    echo "❌ Unable to connect device after $MAX_ATTEMPTS attempts"
+    echo ""
+    echo "🔧 Possible solutions:"
+    echo "1. Restart your phone"
+    echo "2. Try another USB cable"
+    echo "3. Verify that USB debugging is properly enabled"
+    echo "4. Revoke ADB authorizations and reconnect"
+    exit 1
+fi
+
+count_media_in_dir() {
+    local dir="$1"
+
+    # Count images with a simpler command
+    local image_count=$(adb shell find "$dir" -name "*.jpg" -o -name "*.jpeg" -o -name "*.png" -o -name "*.gif" -o -name "*.bmp" -o -name "*.tiff" -o -name "*.webp" -o -name "*.heic" -o -name "*.heif" 2>/dev/null | wc -l)
+
+    # Count videos with a simpler command
+    local video_count=$(adb shell find "$dir" -name "*.mp4" -o -name "*.avi" -o -name "*.mov" -o -name "*.mkv" -o -name "*.wmv" -o -name "*.flv" -o -name "*.webm" -o -name "*.m4v" -o -name "*.3gp" -o -name "*.mpg" -o -name "*.mpeg" 2>/dev/null | wc -l)
+
+    local total=$((image_count + video_count))
+    echo "$total"
+}
+
+# Create backup directory
+BACKUP_DIR="$DESTINATION_DIR"
+mkdir -p "$BACKUP_DIR"
+
+# Create Images and Videos directories
+mkdir -p "$BACKUP_DIR/Images"
+mkdir -p "$BACKUP_DIR/Videos"
+
+echo "📁 Directories created:"
+echo "  - $BACKUP_DIR/Images/"
+echo "  - $BACKUP_DIR/Videos/"
+echo ""
+
+echo ""
+echo "🔍 Recursive search for all media..."
+
+echo "Testing file access..."
+TEST_FILES=$(adb shell ls /sdcard/DCIM 2>/dev/null | head -5)
+if [ -n "$TEST_FILES" ]; then
+    echo "✅ File access OK"
+else
+    echo "⚠️ Access problem, trying alternative..."
+fi
+
+echo "Searching in main directories..."
+
+# Create a list of directories to check (including DCIM subdirectories found)
+MANUAL_DIRS=(
+    "/sdcard/DCIM"
+    "/sdcard/DCIM/Camera"
+    "/sdcard/DCIM/Screenshots"
+    "/sdcard/DCIM/Videocaptures"
+    "/sdcard/DCIM/Viidure"
+    "/sdcard/Pictures"
+    "/sdcard/Download"
+    "/sdcard/Movies"
+    "/sdcard/Music"
+)
+
+echo ""
+echo "📁 Directory verification:"
+echo ""
+
+SELECTED_DIRS=()
+counter=1
+
+for dir in "${MANUAL_DIRS[@]}"; do
+    echo "Checking $dir..."
+    
+    if adb shell test -d "$dir" 2>/dev/null; then
+        files=$(adb shell ls "$dir" 2>/dev/null | wc -l)
+        
+        if [ "$files" -gt 0 ]; then
+            echo "  ✅ $dir ($files files)"
+            
+            media_count=$(count_media_in_dir "$dir")
+            
+            if [ "$media_count" -gt 0 ]; then
+                echo "$counter. $dir ($media_count media files)"
+                SELECTED_DIRS+=("$dir")
+                counter=$((counter + 1))
+            else
+                echo "  ⚠️  $dir (0 media files, but $files files)"
+            fi
+        else
+            echo "  ⚠️  $dir (empty)"
+        fi
+    else
+        echo "  ❌ $dir (does not exist)"
+    fi
+done
+
+# If no directory found, try a broader search
+if [ ${#SELECTED_DIRS[@]} -eq 0 ]; then
+    echo ""
+    echo "🔍 Broader search..."
+    
+    # Search for all directories containing .jpg or .mp4 files
+    echo "Searching for directories with images..."
+    IMAGE_DIRS=$(adb shell find /sdcard -name "*.jpg" -o -name "*.jpeg" -o -name "*.png" 2>/dev/null | head -10 | xargs -I {} dirname {} 2>/dev/null | sort -u)
+    
+    echo "Searching for directories with videos..."
+    VIDEO_DIRS=$(adb shell find /sdcard -name "*.mp4" -o -name "*.avi" -o -name "*.mov" 2>/dev/null | head -10 | xargs -I {} dirname {} 2>/dev/null | sort -u)
+    
+    ALL_FOUND_DIRS=$(echo -e "$IMAGE_DIRS\n$VIDEO_DIRS" | sort -u | grep -v '^$')
+    
+    if [ -n "$ALL_FOUND_DIRS" ]; then
+        echo "✅ Directories found with find:"
+        while IFS= read -r dir; do
+            if [ -n "$dir" ]; then
+                media_count=$(count_media_in_dir "$dir")
+                if [ "$media_count" -gt 0 ]; then
+                    echo "$counter. $dir ($media_count media files)"
+                    SELECTED_DIRS+=("$dir")
+                    counter=$((counter + 1))
+                fi
+            fi
+        done <<< "$ALL_FOUND_DIRS"
+    fi
+fi
+
+if [ ${#SELECTED_DIRS[@]} -eq 0 ]; then
+    echo "❌ No directory with media files found"
+    echo ""
+    echo "🔧 Diagnostic:"
+    echo "Content of /sdcard:"
+    adb shell ls -la /sdcard
+    echo ""
+    echo "Content of /sdcard/DCIM:"
+    adb shell ls -la /sdcard/DCIM 2>/dev/null || echo "DCIM not accessible"
+    exit 1
+fi
+
+echo ""
+echo "Select directories to backup:"
+echo "Format: 1,3,5 (numbers separated by commas)"
+echo "Or 'all' to select everything"
+echo "Or 'dcim' to select only DCIM directories"
+echo ""
+
+read -p "Your choice: " user_choice
+
+FINAL_SELECTION=()
+
+if [ "$user_choice" = "all" ]; then
+    FINAL_SELECTION=("${SELECTED_DIRS[@]}")
+    echo "✅ All directories selected"
+elif [ "$user_choice" = "dcim" ]; then
+    for dir in "${SELECTED_DIRS[@]}"; do
+        if [[ "$dir" == *"DCIM"* ]]; then
+            FINAL_SELECTION+=("$dir")
+        fi
+    done
+    echo "✅ DCIM directories selected"
+else
+    # Process selected numbers
+    IFS=',' read -ra choices <<< "$user_choice"
+    for choice in "${choices[@]}"; do
+        choice=$(echo "$choice" | tr -d ' ')
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#SELECTED_DIRS[@]} ]; then
+            index=$((choice - 1))
+            FINAL_SELECTION+=("${SELECTED_DIRS[$index]}")
+        fi
+    done
+    echo "✅ Directories selected"
+fi
+
+if [ ${#FINAL_SELECTION[@]} -eq 0 ]; then
+    echo "❌ No valid directory selected"
+    exit 1
+fi
+
+echo ""
+echo "📋 Directories to backup:"
+for dir in "${FINAL_SELECTION[@]}"; do
+    echo "  - $dir"
+done
+echo ""
+
+backup_directory() {
+    local source_dir="$1"
+    
+    echo "📂 Backing up $source_dir..."
+    
+    local total_files=$(adb shell find "$source_dir" -type f 2>/dev/null | wc -l)
+    echo "📊 $total_files files found"
+    
+    if [ "$total_files" -eq 0 ]; then
+        echo "⚠️  No files in this directory"
+        return
+    fi
+    
+    echo "📤 Copying images..."
+    adb shell find "$source_dir" -name "*.jpg" -o -name "*.jpeg" -o -name "*.png" -o -name "*.gif" -o -name "*.bmp" -o -name "*.tiff" -o -name "*.webp" -o -name "*.heic" -o -name "*.heif" 2>/dev/null | while read -r file; do
+        if [ -n "$file" ]; then
+            adb pull "$file" "$BACKUP_DIR/Images/" >/dev/null 2>&1
+        fi
+    done
+    
+    echo "📤 Copying videos..."
+    adb shell find "$source_dir" -name "*.mp4" -o -name "*.avi" -o -name "*.mov" -o -name "*.mkv" -o -name "*.wmv" -o -name "*.flv" -o -name "*.webm" -o -name "*.m4v" -o -name "*.3gp" -o -name "*.mpg" -o -name "*.mpeg" 2>/dev/null | while read -r file; do
+        if [ -n "$file" ]; then
+            adb pull "$file" "$BACKUP_DIR/Videos/" >/dev/null 2>&1
+        fi
+    done
+    
+    echo "✅ Copy completed for $source_dir"
+}
+
+for dir in "${FINAL_SELECTION[@]}"; do
+    backup_directory "$dir"
+    echo ""
+done
+
+echo "📊 Counting copied files..."
+FINAL_IMAGES=$(find "$BACKUP_DIR/Images" -type f | wc -l)
+FINAL_VIDEOS=$(find "$BACKUP_DIR/Videos" -type f | wc -l)
+
+# Stop ADB
+adb kill-server
+
+echo ""
+echo "=========================================="
+echo "✅ BACKUP COMPLETED"
+echo "=========================================="
+echo "📁 Directory: $BACKUP_DIR"
+echo "📸 Images copied: $FINAL_IMAGES"
+echo "🎥 Videos copied: $FINAL_VIDEOS"
+echo "📊 Total: $((FINAL_IMAGES + FINAL_VIDEOS)) files"
+echo ""
+echo "📂 Structure created:"
+echo "  - $BACKUP_DIR/Images/ (all images)"
+echo "  - $BACKUP_DIR/Videos/ (all videos)"
+echo "=========================================="
