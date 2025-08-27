@@ -135,7 +135,6 @@ MANUAL_DIRS=(
     "/sdcard/DCIM/Camera"
     "/sdcard/DCIM/Screenshots"
     "/sdcard/DCIM/Videocaptures"
-    "/sdcard/DCIM/Viidure"
     "/sdcard/Pictures"
     "/sdcard/Download"
     "/sdcard/Movies"
